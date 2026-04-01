@@ -116,12 +116,18 @@ export class DeckScene {
       );
 
       if (slot.isAnimating) {
-        slot.flipElapsed = Math.min(slot.flipElapsed + clampedDelta, FLIP_DURATION_MS);
+        slot.flipElapsed = Math.min(
+          slot.flipElapsed + clampedDelta,
+          FLIP_DURATION_MS,
+        );
 
         const progress = slot.flipElapsed / FLIP_DURATION_MS;
 
         if (!slot.hasSwappedTexture && progress >= 0.5 && slot.revealedCard) {
-          slot.sprite.texture = this.textures.getTexture(slot.revealedCard, true);
+          slot.sprite.texture = this.textures.getTexture(
+            slot.revealedCard,
+            true,
+          );
           slot.hasSwappedTexture = true;
         }
 
@@ -158,7 +164,13 @@ export class DeckScene {
       const baseY = 8 + Math.abs(centeredIndex) * 2;
       const baseRotation = centeredIndex * 0.028;
 
-      shadow.ellipse(0, this.options.cardHeight * 0.52, this.options.cardWidth * 0.42, 18)
+      shadow
+        .ellipse(
+          0,
+          this.options.cardHeight * 0.52,
+          this.options.cardWidth * 0.42,
+          18,
+        )
         .fill({ color: 0x080403, alpha: 0.22 });
 
       sprite.width = this.options.cardWidth;
@@ -255,18 +267,24 @@ export class DeckScene {
   }
 
   private renderSlot(slot: SlotView): void {
-    const idleFloat = Math.sin(this.totalElapsed * 0.001 + slot.index * 0.55) * 0.7;
+    const idleFloat =
+      Math.sin(this.totalElapsed * 0.001 + slot.index * 0.55) * 0.7;
     const hoverLift = slot.hoverAmount * HOVER_LIFT;
     const progress = clamp(slot.flipElapsed / FLIP_DURATION_MS, 0, 1);
     const flipWave = Math.sin(progress * Math.PI);
     const widthFactor = slot.isAnimating
       ? Math.max(0.06, Math.abs(Math.cos(progress * Math.PI)))
       : 1;
-    const scaleBoost = slot.isAnimating ? 1 + flipWave * 0.04 : 1 + slot.hoverAmount * 0.015;
-    const flipDirection = slot.index < (this.options.cardCount - 1) * 0.5 ? 1 : -1;
+    const scaleBoost = slot.isAnimating
+      ? 1 + flipWave * 0.04
+      : 1 + slot.hoverAmount * 0.015;
+    const flipDirection =
+      slot.index < (this.options.cardCount - 1) * 0.5 ? 1 : -1;
     const travelX = slot.isAnimating ? flipWave * 10 * flipDirection : 0;
     const liftY = slot.isAnimating ? flipWave * FLIP_LIFT : 0;
-    const skewY = slot.isAnimating ? (0.5 - progress) * 0.32 * flipDirection : 0;
+    const skewY = slot.isAnimating
+      ? (0.5 - progress) * 0.32 * flipDirection
+      : 0;
 
     slot.container.position.set(
       slot.baseX + travelX,
@@ -315,7 +333,13 @@ export class DeckScene {
 
     this.tableShadow.clear();
     this.tableShadow
-      .roundRect(-outerWidth / 2, -outerHeight / 2 + 14, outerWidth, outerHeight, 84)
+      .roundRect(
+        -outerWidth / 2,
+        -outerHeight / 2 + 14,
+        outerWidth,
+        outerHeight,
+        84,
+      )
       .fill({ color: 0x170705, alpha: 0.48 });
 
     this.table.clear();
@@ -387,5 +411,7 @@ function damp(
   smoothing: number,
   deltaMultiplier: number,
 ): number {
-  return current + (target - current) * (1 - (1 - smoothing) ** deltaMultiplier);
+  return (
+    current + (target - current) * (1 - (1 - smoothing) ** deltaMultiplier)
+  );
 }
