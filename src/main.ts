@@ -36,9 +36,9 @@ void (async () => {
   appHost.appendChild(app.canvas);
 
   scene = new DeckScene(app, {
-    cardCount: 5,
-    cardWidth: 170,
-    cardHeight: 238,
+    cardCount: 7,
+    cardWidth: 178,
+    cardHeight: 250,
   });
 
   app.stage.addChild(scene.view);

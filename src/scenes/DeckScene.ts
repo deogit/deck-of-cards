@@ -3,6 +3,7 @@ import {
   Graphics,
   Rectangle,
   Sprite,
+  Text,
   type Application,
 } from "pixi.js";
 
@@ -20,32 +21,17 @@ export interface DeckSceneOptions {
   cardHeight: number;
 }
 
-interface SlotView {
-  readonly index: number;
-  readonly container: Container;
-  readonly shadow: Graphics;
-  readonly sprite: Sprite;
-  readonly baseX: number;
-  readonly baseY: number;
-  readonly baseRotation: number;
-  hoverAmount: number;
-  hoverTarget: number;
-  flipElapsed: number;
-  isAnimating: boolean;
-  hasSwappedTexture: boolean;
-  revealedCard: CardModel | null;
-}
-
 const DEFAULT_OPTIONS: DeckSceneOptions = {
-  cardCount: 5,
-  cardWidth: 170,
-  cardHeight: 238,
+  cardCount: 7,
+  cardWidth: 178,
+  cardHeight: 250,
 };
 
-const CARD_GAP = 18;
-const FLIP_DURATION_MS = 560;
-const HOVER_LIFT = 12;
-const FLIP_LIFT = 58;
+const SHUFFLE_DURATION_MS = 1500;
+const SHUFFLE_CYCLE_MIN_MS = 60;
+const SHUFFLE_CYCLE_MAX_MS = 146;
+const STACK_BASE_Y = -26;
+const IDLE_ROTATION = -0.18;
 
 export class DeckScene {
   public readonly view = new Container();
@@ -53,15 +39,54 @@ export class DeckScene {
   private readonly options: DeckSceneOptions;
   private readonly background = new Graphics();
   private readonly responsiveRoot = new Container();
-  private readonly tableShadow = new Graphics();
-  private readonly table = new Graphics();
-  private readonly tableEdge = new Graphics();
-  private readonly slotLayer = new Container();
+  private readonly focusAura = new Graphics();
+  private readonly stackShadow = new Graphics();
+  private readonly stackRoot = new Container();
+  private readonly backCards: Sprite[] = [];
+  private readonly frontCard: Sprite;
+  private readonly frontGloss = new Graphics();
+  private readonly cardLabel = new Text({
+    text: "",
+    anchor: { x: 0.5, y: 0.5 },
+    style: {
+      align: "center",
+      fill: 0xfdf0da,
+      fontFamily: '"Palatino Linotype", Georgia, serif',
+      fontSize: 29,
+      fontStyle: "italic",
+      fontWeight: "600",
+      letterSpacing: 1.6,
+      stroke: { color: 0x2b120a, width: 3 },
+    },
+  });
+  private readonly helperText = new Text({
+    text: "Tap the stack to shuffle.",
+    anchor: { x: 0.5, y: 0.5 },
+    style: {
+      align: "center",
+      fill: 0xf8d9bf,
+      fontFamily: '"Trebuchet MS", "Gill Sans", sans-serif',
+      fontSize: 17,
+      fontWeight: "600",
+      letterSpacing: 1,
+      stroke: { color: 0x20100a, width: 2 },
+    },
+  });
   private readonly textures: DeckTextureSet;
-  private readonly slots: SlotView[] = [];
 
-  private drawPile: CardModel[] = [];
+  private currentCard: CardModel;
+  private displayedCard: CardModel;
+  private shuffleSequence: CardModel[] = [];
+  private shuffleSequenceIndex = 0;
+  private shuffleFinalCard: CardModel | null = null;
+
   private totalElapsed = 0;
+  private shuffleElapsed = 0;
+  private shuffleCycleElapsed = 0;
+  private hoverAmount = 0;
+  private hoverTarget = 0;
+  private settlePulse = 0;
+  private isShuffling = false;
 
   public constructor(
     app: Application,
@@ -74,31 +99,51 @@ export class DeckScene {
       this.options.cardHeight,
     );
 
-    this.slotLayer.sortableChildren = true;
-    this.view.addChild(this.background, this.responsiveRoot);
-    this.responsiveRoot.addChild(
-      this.tableShadow,
-      this.table,
-      this.tableEdge,
-      this.slotLayer,
+    const initialCard = revealCard(
+      shuffleDeck(createDeck())[0] ?? createDeck()[0]!,
     );
 
-    this.drawTable();
-    this.createSlots();
-    this.startRound();
+    this.currentCard = initialCard;
+    this.displayedCard = initialCard;
+    this.frontCard = new Sprite({
+      anchor: { x: 0.5, y: 0.5 },
+      texture: this.textures.getTexture(initialCard, true),
+    });
+    this.frontCard.width = this.options.cardWidth;
+    this.frontCard.height = this.options.cardHeight;
+
+    this.view.addChild(this.background, this.responsiveRoot);
+    this.responsiveRoot.addChild(
+      this.focusAura,
+      this.stackShadow,
+      this.stackRoot,
+      this.cardLabel,
+      this.helperText,
+    );
+
+    this.buildStack();
+    this.drawAura();
+    this.setDisplayedCard(initialCard);
     this.resize(app.screen.width, app.screen.height);
+    this.renderScene();
   }
 
   public resize(width: number, height: number): void {
     this.drawBackground(width, height);
 
-    const safeWidth = width - 48;
-    const safeHeight = height - 80;
-    const widthScale = safeWidth / (this.getTableWidth() + 24);
-    const heightScale = safeHeight / (this.getTableHeight() + 24);
-    const scale = clamp(Math.min(widthScale, heightScale, 1), 0.55, 1);
+    const safeWidth = width - 40;
+    const safeHeight = height - 48;
+    const scale = clamp(
+      Math.min(
+        safeWidth / this.getSceneWidth(),
+        safeHeight / this.getSceneHeight(),
+        1.08,
+      ),
+      0.52,
+      1.14,
+    );
 
-    this.responsiveRoot.position.set(width * 0.5, height * 0.52);
+    this.responsiveRoot.position.set(width * 0.5, height * 0.54);
     this.responsiveRoot.scale.set(scale);
   }
 
@@ -106,38 +151,19 @@ export class DeckScene {
     const clampedDelta = Math.min(deltaMs, 34);
 
     this.totalElapsed += clampedDelta;
+    this.hoverAmount = damp(
+      this.hoverAmount,
+      this.hoverTarget,
+      0.18,
+      clampedDelta / 16.67,
+    );
+    this.settlePulse = Math.max(0, this.settlePulse - clampedDelta * 0.0024);
 
-    for (const slot of this.slots) {
-      slot.hoverAmount = damp(
-        slot.hoverAmount,
-        slot.hoverTarget,
-        0.18,
-        clampedDelta / 16.67,
-      );
-
-      if (slot.isAnimating) {
-        slot.flipElapsed = Math.min(
-          slot.flipElapsed + clampedDelta,
-          FLIP_DURATION_MS,
-        );
-
-        const progress = slot.flipElapsed / FLIP_DURATION_MS;
-
-        if (!slot.hasSwappedTexture && progress >= 0.5 && slot.revealedCard) {
-          slot.sprite.texture = this.textures.getTexture(
-            slot.revealedCard,
-            true,
-          );
-          slot.hasSwappedTexture = true;
-        }
-
-        if (progress >= 1) {
-          slot.isAnimating = false;
-        }
-      }
-
-      this.renderSlot(slot);
+    if (this.isShuffling) {
+      this.updateShuffle(clampedDelta);
     }
+
+    this.renderScene();
   }
 
   public destroy(): void {
@@ -145,264 +171,329 @@ export class DeckScene {
     this.view.destroy({ children: true });
   }
 
-  private createSlots(): void {
-    const center = (this.options.cardCount - 1) * 0.5;
-    const rowWidth =
-      this.options.cardCount * this.options.cardWidth +
-      (this.options.cardCount - 1) * CARD_GAP;
-    const left = -rowWidth / 2 + this.options.cardWidth / 2;
+  private buildStack(): void {
+    this.stackRoot.eventMode = "static";
+    this.stackRoot.cursor = "pointer";
+    this.stackRoot.hitArea = new Rectangle(
+      -this.options.cardWidth * 0.8,
+      -this.options.cardHeight * 0.85,
+      this.options.cardWidth * 1.6,
+      this.options.cardHeight * 1.7,
+    );
 
-    for (let index = 0; index < this.options.cardCount; index += 1) {
-      const centeredIndex = index - center;
-      const container = new Container();
-      const shadow = new Graphics();
-      const sprite = new Sprite({
-        anchor: 0.5,
+    for (let index = 0; index < this.options.cardCount - 1; index += 1) {
+      const card = new Sprite({
+        anchor: { x: 0.5, y: 0.5 },
         texture: this.textures.back,
       });
-      const baseX = left + index * (this.options.cardWidth + CARD_GAP);
-      const baseY = 8 + Math.abs(centeredIndex) * 2;
-      const baseRotation = centeredIndex * 0.028;
 
-      shadow
-        .ellipse(
-          0,
-          this.options.cardHeight * 0.52,
-          this.options.cardWidth * 0.42,
-          18,
-        )
-        .fill({ color: 0x080403, alpha: 0.22 });
+      card.width = this.options.cardWidth;
+      card.height = this.options.cardHeight;
+      card.alpha = 0.92 - index * 0.06;
 
-      sprite.width = this.options.cardWidth;
-      sprite.height = this.options.cardHeight;
+      this.backCards.push(card);
+      this.stackRoot.addChild(card);
+    }
 
-      container.position.set(baseX, baseY);
-      container.rotation = baseRotation;
-      container.eventMode = "static";
-      container.cursor = "pointer";
-      container.hitArea = new Rectangle(
-        -this.options.cardWidth / 2,
-        -this.options.cardHeight / 2,
-        this.options.cardWidth,
-        this.options.cardHeight,
-      );
-      container.addChild(shadow, sprite);
+    this.frontGloss
+      .roundRect(
+        -this.options.cardWidth * 0.42,
+        -this.options.cardHeight * 0.42,
+        this.options.cardWidth * 0.84,
+        this.options.cardHeight * 0.34,
+        this.options.cardWidth * 0.06,
+      )
+      .fill({ color: 0xffffff, alpha: 0.08 });
 
-      const slot: SlotView = {
-        index,
-        container,
-        shadow,
-        sprite,
-        baseX,
-        baseY,
-        baseRotation,
-        hoverAmount: 0,
-        hoverTarget: 0,
-        flipElapsed: 0,
-        isAnimating: false,
-        hasSwappedTexture: false,
-        revealedCard: null,
-      };
+    this.stackRoot.addChild(this.frontCard, this.frontGloss);
 
-      container.on("pointerenter", () => {
-        if (!slot.revealedCard && !slot.isAnimating) {
-          slot.hoverTarget = 1;
-        }
-      });
+    this.stackRoot.on("pointerenter", () => {
+      if (!this.isShuffling) {
+        this.hoverTarget = 1;
+      }
+    });
 
-      container.on("pointerleave", () => {
-        slot.hoverTarget = 0;
-      });
+    this.stackRoot.on("pointerleave", () => {
+      this.hoverTarget = 0;
+    });
 
-      container.on("pointertap", () => {
-        this.onSlotPressed(slot);
-      });
+    this.stackRoot.on("pointertap", () => {
+      this.startShuffle();
+    });
+  }
 
-      this.slots.push(slot);
-      this.slotLayer.addChild(container);
+  private updateShuffle(deltaMs: number): void {
+    this.shuffleElapsed = Math.min(
+      this.shuffleElapsed + deltaMs,
+      SHUFFLE_DURATION_MS,
+    );
+    this.shuffleCycleElapsed += deltaMs;
+
+    const progress = this.shuffleElapsed / SHUFFLE_DURATION_MS;
+    const cycleInterval = lerp(
+      SHUFFLE_CYCLE_MIN_MS,
+      SHUFFLE_CYCLE_MAX_MS,
+      easeInCubic(progress),
+    );
+
+    while (this.shuffleCycleElapsed >= cycleInterval) {
+      this.shuffleCycleElapsed -= cycleInterval;
+      this.advanceShuffleCard();
+    }
+
+    if (progress >= 1) {
+      this.finishShuffle();
     }
   }
 
-  private onSlotPressed(slot: SlotView): void {
-    if (slot.isAnimating) {
+  private startShuffle(): void {
+    if (this.isShuffling) {
       return;
     }
 
-    if (slot.revealedCard) {
-      if (this.areAllSlotsRevealed()) {
-        this.startRound();
-      }
+    const shuffledDeck = shuffleDeck(createDeck()).map((card) =>
+      revealCard(card),
+    );
+    const nextCard =
+      shuffledDeck.find((card) => card.id !== this.currentCard.id) ??
+      this.currentCard;
 
+    this.shuffleSequence = shuffledDeck;
+    this.shuffleFinalCard = nextCard;
+    this.shuffleSequenceIndex = 0;
+    this.shuffleElapsed = 0;
+    this.shuffleCycleElapsed = SHUFFLE_CYCLE_MIN_MS;
+    this.hoverAmount = 0;
+    this.hoverTarget = 0;
+    this.settlePulse = 0;
+    this.isShuffling = true;
+    this.helperText.text = "Shuffling...";
+    this.stackRoot.cursor = "default";
+
+    this.advanceShuffleCard();
+  }
+
+  private finishShuffle(): void {
+    this.isShuffling = false;
+    this.currentCard = this.shuffleFinalCard ?? this.displayedCard;
+    this.setDisplayedCard(this.currentCard);
+    this.shuffleSequence = [];
+    this.shuffleFinalCard = null;
+    this.shuffleSequenceIndex = 0;
+    this.settlePulse = 1;
+    this.helperText.text = "Tap the stack to shuffle again.";
+    this.stackRoot.cursor = "pointer";
+  }
+
+  private advanceShuffleCard(): void {
+    if (this.shuffleSequence.length === 0) {
       return;
     }
 
-    const nextCard = this.drawPile.shift();
+    let nextCard = this.shuffleSequence[this.shuffleSequenceIndex];
+    let attempts = 0;
+
+    while (
+      nextCard &&
+      nextCard.id === this.displayedCard.id &&
+      attempts < this.shuffleSequence.length - 1
+    ) {
+      this.shuffleSequenceIndex =
+        (this.shuffleSequenceIndex + 1) % this.shuffleSequence.length;
+      nextCard = this.shuffleSequence[this.shuffleSequenceIndex];
+      attempts += 1;
+    }
 
     if (!nextCard) {
-      this.startRound();
       return;
     }
 
-    slot.revealedCard = revealCard(nextCard);
-    slot.isAnimating = true;
-    slot.flipElapsed = 0;
-    slot.hasSwappedTexture = false;
-    slot.hoverTarget = 0;
+    this.setDisplayedCard(nextCard);
+    this.shuffleSequenceIndex =
+      (this.shuffleSequenceIndex + 1) % this.shuffleSequence.length;
   }
 
-  private startRound(): void {
-    this.drawPile = shuffleDeck(createDeck());
-
-    for (const slot of this.slots) {
-      slot.revealedCard = null;
-      slot.isAnimating = false;
-      slot.flipElapsed = 0;
-      slot.hasSwappedTexture = false;
-      slot.hoverAmount = 0;
-      slot.hoverTarget = 0;
-      slot.sprite.texture = this.textures.back;
-      slot.sprite.scale.set(1);
-      slot.container.skew.set(0);
-    }
+  private setDisplayedCard(card: CardModel): void {
+    this.displayedCard = card;
+    this.frontCard.texture = this.textures.getTexture(card, true);
+    this.cardLabel.text = describeCard(card);
   }
 
-  private renderSlot(slot: SlotView): void {
-    const idleFloat =
-      Math.sin(this.totalElapsed * 0.001 + slot.index * 0.55) * 0.7;
-    const hoverLift = slot.hoverAmount * HOVER_LIFT;
-    const progress = clamp(slot.flipElapsed / FLIP_DURATION_MS, 0, 1);
-    const flipWave = Math.sin(progress * Math.PI);
-    const widthFactor = slot.isAnimating
-      ? Math.max(0.06, Math.abs(Math.cos(progress * Math.PI)))
-      : 1;
-    const scaleBoost = slot.isAnimating
-      ? 1 + flipWave * 0.04
-      : 1 + slot.hoverAmount * 0.015;
-    const flipDirection =
-      slot.index < (this.options.cardCount - 1) * 0.5 ? 1 : -1;
-    const travelX = slot.isAnimating ? flipWave * 10 * flipDirection : 0;
-    const liftY = slot.isAnimating ? flipWave * FLIP_LIFT : 0;
-    const skewY = slot.isAnimating
-      ? (0.5 - progress) * 0.32 * flipDirection
+  private renderScene(): void {
+    const idleBob = Math.sin(this.totalElapsed * 0.0015) * 3.5;
+    const idleSway = Math.sin(this.totalElapsed * 0.0011) * 0.035;
+    const shuffleProgress = this.isShuffling
+      ? clamp(this.shuffleElapsed / SHUFFLE_DURATION_MS, 0, 1)
       : 0;
+    const shuffleIntensity = this.isShuffling
+      ? Math.sin(shuffleProgress * Math.PI)
+      : 0;
+    const hoverLift = this.hoverAmount * 10;
+    const sideSwing =
+      Math.sin(shuffleProgress * Math.PI * 4.6) * 34 * shuffleIntensity;
+    const lift =
+      shuffleIntensity * 34 +
+      Math.abs(Math.sin(shuffleProgress * Math.PI * 6.2)) *
+        8 *
+        shuffleIntensity;
+    const twist =
+      Math.sin(shuffleProgress * Math.PI * 4.3 + 0.35) *
+      0.13 *
+      shuffleIntensity;
+    const pop = this.settlePulse * 0.08;
 
-    slot.container.position.set(
-      slot.baseX + travelX,
-      slot.baseY - idleFloat - hoverLift - liftY,
+    this.focusAura.alpha =
+      0.64 + this.hoverAmount * 0.12 + shuffleIntensity * 0.16;
+    this.focusAura.scale.set(
+      1 + this.hoverAmount * 0.03 + shuffleIntensity * 0.09,
     );
-    slot.container.rotation =
-      slot.baseRotation +
-      slot.hoverAmount * 0.01 +
-      (slot.isAnimating ? flipWave * 0.035 * flipDirection : 0);
-    slot.container.skew.set(0, skewY);
-    slot.container.zIndex = slot.isAnimating ? 100 + slot.index : slot.index;
 
-    slot.sprite.scale.set(widthFactor * scaleBoost, scaleBoost);
+    this.stackRoot.position.set(
+      sideSwing,
+      STACK_BASE_Y - idleBob - hoverLift - lift,
+    );
+    this.stackRoot.rotation = IDLE_ROTATION + idleSway + twist;
+    this.stackRoot.scale.set(
+      1 + this.hoverAmount * 0.018 + shuffleIntensity * 0.05,
+      1 + this.hoverAmount * 0.012 + shuffleIntensity * 0.02,
+    );
 
-    slot.shadow.alpha = 0.2 - hoverLift * 0.004 - flipWave * 0.08;
-    slot.shadow.scale.set(1 + flipWave * 0.12, 1 - flipWave * 0.08);
+    this.frontCard.position.set(
+      Math.sin(shuffleProgress * Math.PI * 7.1) * 6 * shuffleIntensity,
+      -6 - shuffleIntensity * 5,
+    );
+    this.frontCard.rotation =
+      Math.sin(shuffleProgress * Math.PI * 5.4) * 0.03 * shuffleIntensity;
+    this.frontCard.scale.set(1.02 + pop, 1.02 + pop);
+
+    this.frontGloss.position.copyFrom(this.frontCard.position);
+    this.frontGloss.rotation = this.frontCard.rotation;
+    this.frontGloss.scale.set(1 + pop * 0.3);
+    this.frontGloss.alpha = 0.86 + shuffleIntensity * 0.12;
+
+    for (let index = 0; index < this.backCards.length; index += 1) {
+      const card = this.backCards[index];
+      const depth = index + 1;
+      const direction = index % 2 === 0 ? 1 : -1;
+      const ripple = Math.sin(shuffleProgress * Math.PI * 6.6 + depth * 0.7);
+      const spread = shuffleIntensity * (0.9 + depth * 0.08);
+
+      card.position.set(
+        depth * 6 + direction * ripple * 12 * spread,
+        depth * 7 + Math.abs(ripple) * 4 * spread,
+      );
+      card.rotation = direction * 0.018 * depth + ripple * 0.075 * spread;
+      card.scale.set(1 - depth * 0.006, 1);
+      card.alpha = 0.92 - index * 0.07 + shuffleIntensity * 0.08;
+    }
+
+    this.renderShadow(sideSwing, shuffleIntensity);
+
+    this.cardLabel.position.set(0, -this.options.cardHeight * 0.94);
+    this.cardLabel.scale.set(1 + pop * 0.22);
+    this.cardLabel.alpha = 0.94 + this.hoverAmount * 0.06;
+
+    this.helperText.position.set(0, this.options.cardHeight * 0.97);
+    this.helperText.alpha = 0.74 + this.hoverAmount * 0.18;
   }
 
-  private areAllSlotsRevealed(): boolean {
-    return this.slots.every((slot) => slot.revealedCard);
+  private renderShadow(sideSwing: number, shuffleIntensity: number): void {
+    this.stackShadow.clear();
+    this.stackShadow
+      .ellipse(
+        sideSwing * 0.35,
+        this.options.cardHeight * 0.74 - shuffleIntensity * 5,
+        this.options.cardWidth * (0.74 + shuffleIntensity * 0.1),
+        28 - shuffleIntensity * 4,
+      )
+      .fill({ color: 0x050201, alpha: 0.34 + shuffleIntensity * 0.08 });
+  }
+
+  private drawAura(): void {
+    this.focusAura.clear();
+    this.focusAura
+      .ellipse(
+        0,
+        -this.options.cardHeight * 0.06,
+        this.options.cardWidth * 1.02,
+        this.options.cardHeight * 0.46,
+      )
+      .fill({ color: 0xffd3a8, alpha: 0.12 });
+
+    this.focusAura
+      .ellipse(
+        0,
+        this.options.cardHeight * 0.02,
+        this.options.cardWidth * 0.74,
+        this.options.cardHeight * 0.28,
+      )
+      .fill({ color: 0xfff5e5, alpha: 0.1 });
   }
 
   private drawBackground(width: number, height: number): void {
     this.background.clear();
 
-    this.background.rect(0, 0, width, height).fill({ color: 0x2b120b });
+    this.background.rect(0, 0, width, height).fill({ color: 0x120605 });
 
     this.background
-      .circle(width * 0.2, height * 0.2, Math.min(width, height) * 0.3)
-      .fill({ color: 0x5c2117, alpha: 0.16 });
+      .circle(width * 0.16, height * 0.18, Math.min(width, height) * 0.24)
+      .fill({ color: 0xd35b28, alpha: 0.14 });
 
     this.background
-      .circle(width * 0.84, height * 0.18, Math.min(width, height) * 0.22)
-      .fill({ color: 0x4a180f, alpha: 0.24 });
+      .circle(width * 0.82, height * 0.18, Math.min(width, height) * 0.22)
+      .fill({ color: 0x8f1f20, alpha: 0.2 });
 
     this.background
-      .circle(width * 0.5, height * 0.82, Math.min(width, height) * 0.34)
-      .fill({ color: 0x190805, alpha: 0.24 });
+      .circle(width * 0.5, height * 0.7, Math.min(width, height) * 0.3)
+      .fill({ color: 0x401312, alpha: 0.26 });
+
+    this.background
+      .circle(width * 0.5, height * 0.46, Math.min(width, height) * 0.16)
+      .fill({ color: 0xf3b978, alpha: 0.06 });
   }
 
-  private drawTable(): void {
-    const outerWidth = this.getTableWidth();
-    const outerHeight = this.getTableHeight();
-    const feltInsetX = 34;
-    const feltInsetY = 24;
-
-    this.tableShadow.clear();
-    this.tableShadow
-      .roundRect(
-        -outerWidth / 2,
-        -outerHeight / 2 + 14,
-        outerWidth,
-        outerHeight,
-        84,
-      )
-      .fill({ color: 0x170705, alpha: 0.48 });
-
-    this.table.clear();
-    this.table
-      .roundRect(-outerWidth / 2, -outerHeight / 2, outerWidth, outerHeight, 84)
-      .fill({ color: 0x8d4f37 });
-
-    this.table
-      .roundRect(
-        -outerWidth / 2 + 10,
-        -outerHeight / 2 + 8,
-        outerWidth - 20,
-        outerHeight - 16,
-        78,
-      )
-      .fill({ color: 0x633022 });
-
-    this.table
-      .roundRect(
-        -outerWidth / 2 + feltInsetX,
-        -outerHeight / 2 + feltInsetY,
-        outerWidth - feltInsetX * 2,
-        outerHeight - feltInsetY * 2,
-        62,
-      )
-      .fill({ color: 0x0a8b7f })
-      .stroke({ width: 6, color: 0x06554d, alpha: 0.55 });
-
-    this.table
-      .ellipse(0, 8, outerWidth * 0.31, outerHeight * 0.22)
-      .fill({ color: 0x6cf2dc, alpha: 0.08 });
-
-    this.tableEdge.clear();
-    this.tableEdge
-      .roundRect(-outerWidth / 2, -outerHeight / 2, outerWidth, outerHeight, 84)
-      .stroke({ width: 8, color: 0xffb17b, alpha: 0.62 });
-
-    this.tableEdge
-      .roundRect(
-        -outerWidth / 2 + feltInsetX,
-        -outerHeight / 2 + feltInsetY,
-        outerWidth - feltInsetX * 2,
-        outerHeight - feltInsetY * 2,
-        62,
-      )
-      .stroke({ width: 3, color: 0xb4fff0, alpha: 0.1 });
+  private getSceneWidth(): number {
+    return this.options.cardWidth * 2.3;
   }
 
-  private getTableWidth(): number {
-    return (
-      this.options.cardCount * this.options.cardWidth +
-      (this.options.cardCount - 1) * CARD_GAP +
-      148
-    );
+  private getSceneHeight(): number {
+    return this.options.cardHeight * 2.5;
   }
+}
 
-  private getTableHeight(): number {
-    return this.options.cardHeight + 126;
+function describeCard(card: CardModel): string {
+  return `${describeRank(card.rank)} of ${capitalize(card.suit)}`;
+}
+
+function describeRank(rank: CardModel["rank"]): string {
+  switch (rank) {
+    case "A":
+      return "Ace";
+    case "J":
+      return "Jack";
+    case "Q":
+      return "Queen";
+    case "K":
+      return "King";
+    default:
+      return rank;
   }
+}
+
+function capitalize(value: string): string {
+  return `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function lerp(start: number, end: number, amount: number): number {
+  return start + (end - start) * amount;
+}
+
+function easeInCubic(value: number): number {
+  return value * value * value;
 }
 
 function damp(

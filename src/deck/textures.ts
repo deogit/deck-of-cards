@@ -299,7 +299,7 @@ function createBackTexture(
     .stroke({ width: 2, color: 0xf7e9cf, alpha: 0.58 });
 
   const crest = new Text({
-    text: "♠\n♥\n♣\n♦",
+    text: "\u2660\n\u2665\n\u2663\n\u2666",
     anchor: { x: 0.5, y: 0.5 },
     x: cardWidth * 0.5,
     y: cardHeight * 0.5,
