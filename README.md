@@ -9,10 +9,11 @@ A PixiJS + TypeScript demo that shows five facedown playing cards on a casino-st
 
 ## Run Locally
 
-1. Open a terminal in this project folder:
+1. Clone the repository:
 
 ```powershell
-cd "c:\Users\Deo Gianan\Desktop\stack of cards"
+git clone <your-repo-url>
+cd stack-of-cards
 ```
 
 2. Install dependencies:
