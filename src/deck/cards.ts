@@ -15,11 +15,14 @@ export type Rank =
   | "Q"
   | "K";
 
-export interface CardModel {
+export interface PlayingCard {
   suit: Suit;
   rank: Rank;
-  faceUp: boolean;
   id: string;
+}
+
+export interface CardModel extends PlayingCard {
+  faceUp: boolean;
 }
 
 export const SUITS: Suit[] = ["spades", "hearts", "clubs", "diamonds"];
@@ -39,21 +42,35 @@ export const RANKS: Rank[] = [
   "K",
 ];
 
-export function createDeck(faceUp = false): CardModel[] {
+export function createPlayingCard(rank: Rank, suit: Suit): PlayingCard {
+  return {
+    suit,
+    rank,
+    id: `${rank}-${suit}`,
+  };
+}
+
+export function toCardModel(card: PlayingCard, faceUp = false): CardModel {
+  return {
+    ...card,
+    faceUp,
+  };
+}
+
+export function createStandardDeck(): PlayingCard[] {
   return SUITS.flatMap((suit) =>
-    RANKS.map((rank) => ({
-      suit,
-      rank,
-      faceUp,
-      id: `${rank}-${suit}`,
-    })),
+    RANKS.map((rank) => createPlayingCard(rank, suit)),
   );
 }
 
-export function shuffleDeck(
-  sourceDeck: readonly CardModel[],
+export function createDeck(faceUp = false): CardModel[] {
+  return createStandardDeck().map((card) => toCardModel(card, faceUp));
+}
+
+export function shuffleDeck<T>(
+  sourceDeck: readonly T[],
   random = Math.random,
-): CardModel[] {
+): T[] {
   const deck = [...sourceDeck];
 
   for (let index = deck.length - 1; index > 0; index -= 1) {
@@ -67,11 +84,8 @@ export function shuffleDeck(
   return deck;
 }
 
-export function revealCard(card: CardModel): CardModel {
-  return {
-    ...card,
-    faceUp: true,
-  };
+export function revealCard(card: PlayingCard | CardModel): CardModel {
+  return toCardModel(card, true);
 }
 
 export function getSuitSymbol(suit: Suit): string {

@@ -10,13 +10,13 @@ import {
 import {
   getSuitColor,
   getSuitSymbol,
-  type CardModel,
+  type PlayingCard,
   type Rank,
 } from "./cards";
 
 export interface DeckTextureSet {
   back: Texture;
-  getTexture(card: CardModel, forceFaceUp?: boolean): Texture;
+  getTexture(card: PlayingCard, forceFaceUp?: boolean): Texture;
   destroy(): void;
 }
 
@@ -132,9 +132,8 @@ export function createDeckTextures(
       const card = {
         suit,
         rank,
-        faceUp: true,
         id: `${rank}-${suit}`,
-      } satisfies CardModel;
+      } satisfies PlayingCard;
 
       faceTextures.set(
         getTextureKey(card),
@@ -145,7 +144,7 @@ export function createDeckTextures(
 
   return {
     back: backTexture,
-    getTexture(card, forceFaceUp = card.faceUp) {
+    getTexture(card, forceFaceUp = true) {
       if (!forceFaceUp) {
         return backTexture;
       }
@@ -166,7 +165,7 @@ export function createDeckTextures(
 
 function createFaceTexture(
   renderer: Renderer,
-  card: CardModel,
+  card: PlayingCard,
   cardWidth: number,
   cardHeight: number,
 ): Texture {
@@ -467,6 +466,6 @@ function addCourtDesign(
   cardContainer.addChild(frame, suitTop, rankCenter, band, suitBottom);
 }
 
-function getTextureKey(card: CardModel): string {
+function getTextureKey(card: PlayingCard): string {
   return `${card.rank}-${card.suit}`;
 }

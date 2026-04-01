@@ -1,6 +1,6 @@
 import { Application } from "pixi.js";
 
-import { DeckScene } from "./scenes/DeckScene";
+import { BlackjackScene } from "./scenes/BlackjackScene";
 
 const appHost = document.getElementById("pixi-container");
 
@@ -9,7 +9,7 @@ if (!appHost) {
 }
 
 const app = new Application();
-let scene: DeckScene | null = null;
+let scene: BlackjackScene | null = null;
 
 const syncLayout = () => {
   scene?.resize(app.screen.width, app.screen.height);
@@ -35,11 +35,7 @@ void (async () => {
 
   appHost.appendChild(app.canvas);
 
-  scene = new DeckScene(app, {
-    cardCount: 7,
-    cardWidth: 178,
-    cardHeight: 250,
-  });
+  scene = new BlackjackScene(app);
 
   app.stage.addChild(scene.view);
   syncLayout();
